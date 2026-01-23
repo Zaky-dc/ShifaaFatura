@@ -3,6 +3,9 @@ import { useState, useRef, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useReactToPrint } from "react-to-print";
 import { InvoiceTemplate } from "@/components/InvoiceTemplate";
+// IMPORTAMOS O DB PARA LER O CONTADOR
+import { db } from "@/lib/firebase"; 
+import { ref, get } from "firebase/database";
 import {
   createInvoice,
   updateInvoice,
@@ -13,9 +16,9 @@ import {
   Trash2,
   Save,
   ArrowLeft,
-  Calendar,
   Phone,
   CreditCard,
+  Loader2, // Ícone de loading
 } from "lucide-react";
 
 export default function NovaFaturaPage() {
@@ -35,42 +38,39 @@ function NovaFaturaContent() {
 
   const componentRef = useRef();
   const [loading, setLoading] = useState(false);
+  const [nextNumberPreview, setNextNumberPreview] = useState(null); // Estado para o próximo número
 
   const [invoiceData, setInvoiceData] = useState({
     invoiceNumber: "",
     clientName: "",
     patientName: "",
     patientNid: "",
-    patientContact: "", // Já tínhamos no estado, faltava o input
+    patientContact: "",
     date: new Date().toISOString().split("T")[0],
-    dueDate: "", // Data de expiração
+    dueDate: "",
     procedureTitle: "",
     grandTotal: 0,
     items: [{ qty: 1, description: "Consulta", price: 0, total: 0 }],
-    displayMode: "standard", // 'standard' | 'descriptive'
+    displayMode: "standard",
   });
 
   // Layout State
-  const [refHeight, setRefHeight] = useState(250); // Altura inicial da área de referência
+  const [refHeight, setRefHeight] = useState(250);
   const isDragging = useRef(false);
 
   // Resize Handlers
   useEffect(() => {
     const handleMouseMove = (e) => {
       if (!isDragging.current) return;
-      // Calcula a nova altura baseada na posição do mouse (de baixo para cima)
       const newHeight = window.innerHeight - e.clientY;
-      // Limites: min 100px, max 80% da tela
       if (newHeight > 100 && newHeight < window.innerHeight * 0.8) {
         setRefHeight(newHeight);
       }
     };
-
     const handleMouseUp = () => {
       isDragging.current = false;
       document.body.style.cursor = "default";
     };
-
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
     return () => {
@@ -82,10 +82,29 @@ function NovaFaturaContent() {
   const startResize = (e) => {
     isDragging.current = true;
     document.body.style.cursor = "row-resize";
-    e.preventDefault(); // Evita seleção de texto
+    e.preventDefault();
   };
 
-  // --- CARREGAR DADOS ---
+  // --- 1. BUSCAR O PRÓXIMO NÚMERO (PREVISÃO) ---
+  useEffect(() => {
+    // Só busca se for uma NOVA fatura (sem ID e não edição)
+    // Se for clone, também queremos ver o próximo número
+    if (!invoiceId || mode === 'clone') {
+        const fetchNextNumber = async () => {
+            try {
+                const snapshot = await get(ref(db, 'settings/invoiceCounter'));
+                const current = snapshot.exists() ? snapshot.val() : 3977;
+                setNextNumberPreview(current + 1);
+            } catch (e) {
+                console.error("Erro ao ler contador", e);
+            }
+        };
+        fetchNextNumber();
+    }
+  }, [invoiceId, mode]);
+
+
+  // --- CARREGAR DADOS SE FOR EDIÇÃO ---
   useEffect(() => {
     async function loadInvoice() {
       if (!invoiceId) return;
@@ -94,7 +113,6 @@ function NovaFaturaContent() {
       const data = await getInvoiceById(invoiceId);
 
       if (data) {
-        // Merge com defaults para evitar undefined (Inputs controlados)
         const safeData = {
           invoiceNumber: "",
           clientName: "",
@@ -105,7 +123,6 @@ function NovaFaturaContent() {
           dueDate: "",
           procedureTitle: "",
           grandTotal: 0,
-          grandTotal: 0,
           items: [{ qty: 1, description: "Consulta", price: 0, total: 0 }],
           displayMode: "standard",
           ...data,
@@ -114,7 +131,7 @@ function NovaFaturaContent() {
         if (mode === "clone") {
           setInvoiceData({
             ...safeData,
-            invoiceNumber: "",
+            invoiceNumber: "", // Limpa o número para gerar um novo
             date: new Date().toISOString().split("T")[0],
             dueDate: "",
           });
@@ -133,7 +150,6 @@ function NovaFaturaContent() {
     const item = newItems[index];
     item[field] = value;
 
-    // Apenas recalcula o total se estiver no modo Standard ou forçado
     if (invoiceData.displayMode === "standard") {
       if (field === "qty" || field === "price") {
         const q = parseFloat(item.qty) || 0;
@@ -150,12 +166,10 @@ function NovaFaturaContent() {
         grandTotal: newGrandTotal,
       }));
     } else {
-      // Modo descritivo: apenas atualiza o item
       setInvoiceData((prev) => ({ ...prev, items: newItems }));
     }
   };
 
-  // Toggle Mode
   const toggleDisplayMode = () => {
     const newMode =
       invoiceData.displayMode === "standard" ? "descriptive" : "standard";
@@ -198,18 +212,15 @@ function NovaFaturaContent() {
       if (mode === "edit" && invoiceData.invoiceNumber) {
         await updateInvoice(invoiceData.invoiceNumber, invoiceData);
         alert("Fatura atualizada com sucesso!");
-        window.location.href = "/"; // Sair da tela
+        window.location.href = "/";
       } else {
-        // Garantir que é uma nova fatura do sistema, sem vinculo de importação
         const newInvoiceData = { ...invoiceData };
-        delete newInvoiceData.source; // Remove 'excel_import' se existir
-        delete newInvoiceData.id; // Garante que cria novo ID
+        delete newInvoiceData.source;
+        delete newInvoiceData.id;
 
         const num = await createInvoice(newInvoiceData);
-        // setInvoiceData((prev) => ({ ...prev, invoiceNumber: num })); // Não precisa mais atualizar state se vai sair
         alert(`Fatura ${num} gerada com sucesso!`);
-        // if (mode === "clone") router.push(`/faturas/nova?id=${num}&mode=edit`); // Removido comportamento de continuar
-        window.location.href = "/"; // Sair da tela
+        window.location.href = "/";
       }
     } catch (e) {
       console.error(e);
@@ -230,18 +241,22 @@ function NovaFaturaContent() {
           >
             <ArrowLeft size={16} /> Voltar
           </button>
-          <h1 className="text-sm font-bold text-gray-700 uppercase tracking-wide">
-            {mode === "edit"
-              ? `Editando #${invoiceData.invoiceNumber}`
-              : mode === "clone"
-                ? "Nova Cópia"
-                : "Nova Fatura"}
-          </h1>
+          
+          <div className="text-right">
+             <h1 className="text-sm font-bold text-gray-700 uppercase tracking-wide">
+                {mode === "edit" ? `Editando #${invoiceData.invoiceNumber}` : "Nova Fatura"}
+             </h1>
+             {/* MOSTRA O PRÓXIMO NÚMERO AQUI */}
+             {mode !== "edit" && (
+                 <span className="text-xs text-blue-600 font-mono block">
+                    {nextNumberPreview ? `Próximo ID: #${nextNumberPreview}` : 'Carregando ID...'}
+                 </span>
+             )}
+          </div>
         </div>
 
         {/* Formulário com Scroll */}
         <div className="flex-grow overflow-y-auto p-6 space-y-4">
-          {/* SEGURADORA & PACIENTE */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-gray-500 mb-1">
@@ -276,7 +291,6 @@ function NovaFaturaContent() {
             </div>
           </div>
 
-          {/* NID & CONTACTO (Novo campo aqui) */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-gray-500 mb-1">
@@ -326,7 +340,6 @@ function NovaFaturaContent() {
             </div>
           </div>
 
-          {/* DATAS (Emissão & Validade) */}
           <div className="grid grid-cols-2 gap-3 bg-gray-50 p-3 rounded border border-gray-200">
             <div>
               <label className="block text-xs font-bold text-gray-500 mb-1">
@@ -356,7 +369,6 @@ function NovaFaturaContent() {
             </div>
           </div>
 
-          {/* TOGGLE MODO DE EXIBIÇÃO */}
           <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 flex items-center justify-between mb-4">
             <div className="flex flex-col">
               <span className="text-sm font-bold text-blue-800">
@@ -383,7 +395,6 @@ function NovaFaturaContent() {
             </button>
           </div>
 
-          {/* Título do Procedimento */}
           <div>
             <label className="block text-xs font-bold text-gray-500 mb-1">
               Título do Procedimento
@@ -404,7 +415,6 @@ function NovaFaturaContent() {
 
           <hr className="border-gray-200" />
 
-          {/* Lista de Itens */}
           <div>
             <h3 className="text-xs font-bold text-gray-700 uppercase mb-2">
               Itens da Fatura
@@ -415,7 +425,6 @@ function NovaFaturaContent() {
                   key={index}
                   className="flex gap-2 items-start bg-gray-50 p-2 rounded border border-gray-200 hover:border-blue-300 transition-colors"
                 >
-                  {/* QTY - Visible in BOTH modes */}
                   <div className="w-14">
                     <input
                       type={
@@ -431,8 +440,6 @@ function NovaFaturaContent() {
                       }
                     />
                   </div>
-
-                  {/* DESCRIPTION - Always visible */}
                   <div className="flex-grow">
                     <textarea
                       rows={invoiceData.displayMode === "descriptive" ? 2 : 1}
@@ -444,8 +451,6 @@ function NovaFaturaContent() {
                       }
                     />
                   </div>
-
-                  {/* PRICE - Only in Standard */}
                   {invoiceData.displayMode === "standard" && (
                     <div className="w-24">
                       <input
@@ -459,8 +464,6 @@ function NovaFaturaContent() {
                       />
                     </div>
                   )}
-
-                  {/* TOTAL LINE - Only in Standard (Read-only) */}
                   {invoiceData.displayMode === "standard" && (
                     <div className="w-24 flex items-center justify-end text-xs font-bold text-gray-700 bg-gray-200 rounded px-2">
                       {(item.total || 0).toLocaleString("pt-PT")}
@@ -484,7 +487,6 @@ function NovaFaturaContent() {
           </div>
         </div>
 
-        {/* Rodapé Fixo (Ações) */}
         <div className="border-t p-4 bg-white z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
           <div className="flex justify-between items-center mb-3 bg-gray-800 text-white p-3 rounded-lg">
             <span className="text-xs font-medium uppercase text-gray-300">
@@ -523,7 +525,11 @@ function NovaFaturaContent() {
               disabled={loading}
               className="bg-green-600 hover:bg-green-700 text-white p-3 rounded-lg font-bold flex justify-center gap-2 items-center transition-all disabled:opacity-50 text-sm"
             >
-              <Save size={18} />{" "}
+              {loading ? (
+                  <Loader2 className="animate-spin" size={18} />
+              ) : (
+                  <Save size={18} />
+              )}
               {loading
                 ? "Aguarde..."
                 : mode === "edit"
@@ -543,7 +549,6 @@ function NovaFaturaContent() {
         {/* --- DADOS DE REFERÊNCIA (Para cópia manual) --- */}
         {invoiceData.rawData && invoiceData.rawData.length > 0 && (
           <>
-            {/* DRAG HANDLE */}
             <div
               onMouseDown={startResize}
               className="h-2 bg-gray-200 hover:bg-blue-400 cursor-row-resize flex justify-center items-center border-t border-b border-gray-300 transition-colors"
