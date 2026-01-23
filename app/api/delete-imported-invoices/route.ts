@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebase"; 
 import { ref, get, update } from "firebase/database";
 
-// Force dynamic
 export const dynamic = 'force-dynamic';
 
 // Helper to chunk array
@@ -14,13 +13,28 @@ const chunkArray = (array: any[], size: number) => {
   return result;
 };
 
-export async function DELETE(req: NextRequest) {
+// MUDANÇA: Agora é POST porque recebemos um corpo JSON com a passkey
+export async function POST(req: NextRequest) {
   try {
+    // 1. Ler e Validar a Senha
+    const { passkey } = await req.json();
+
+    if (!passkey) {
+        return NextResponse.json({ error: "Senha necessária" }, { status: 401 });
+    }
+
+    // Verificar senha no Firebase
+    const passkeyRef = ref(db, 'settings/adminPasskey');
+    const passkeySnap = await get(passkeyRef);
+    // Senha padrão '091093' se não houver configuração
+    const validPasskey = passkeySnap.exists() ? passkeySnap.val() : "091093"; 
+
+    if (passkey !== validPasskey) {
+        return NextResponse.json({ error: "Senha incorreta!" }, { status: 403 });
+    }
+
+    // 2. Lógica de Eliminação (Mantida do teu código original)
     const invoicesRef = ref(db, 'invoices');
-    
-    // 1. Fetch ALL invoices (keys and minimal data preferably, but RTDB fetches all)
-    // We cannot use orderByChild('source') because it requires an index in Rules which we can't set.
-    // So we fetch global list and filter in memory. This is heavy but safe from "Index fail".
     const snapshot = await get(invoicesRef);
 
     if (!snapshot.exists()) {
@@ -30,7 +44,7 @@ export async function DELETE(req: NextRequest) {
     const data = snapshot.val();
     const invoicesToDelete: string[] = [];
 
-    // 2. Filter in memory
+    // Filtrar em memória (source === 'excel_import')
     Object.entries(data).forEach(([key, value]: [string, any]) => {
         if (value.source === 'excel_import') {
             invoicesToDelete.push(key);
@@ -38,10 +52,10 @@ export async function DELETE(req: NextRequest) {
     });
 
     if (invoicesToDelete.length === 0) {
-        return NextResponse.json({ success: true, count: 0, message: "No imported invoices found to delete." });
+        return NextResponse.json({ success: true, count: 0, message: "Nenhuma fatura importada encontrada." });
     }
 
-    // 3. Batch delete in chunks
+    // Batch delete in chunks
     const chunks = chunkArray(invoicesToDelete, 500);
     let totalDeleted = 0;
 
@@ -51,7 +65,6 @@ export async function DELETE(req: NextRequest) {
             updates[`invoices/${key}`] = null;
         });
         
-        // Execute batch update
         await update(ref(db), updates);
         totalDeleted += chunk.length;
     }
