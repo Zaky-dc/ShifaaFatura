@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, Fragment } from "react";
-// IMPORTANTE: Certifica-te que tens este ficheiro criado em lib/excelParser.js
+// Certifica-te que tens este ficheiro criado em lib/excelParser.js
 import { parseExcelFile } from "@/lib/excelParser"; 
 import {
   Upload,
@@ -15,7 +15,6 @@ import {
   Trash
 } from "lucide-react";
 
-// Interface para os dados extraídos
 interface ExtractedData {
   sheetName: string;
   patient: string;
@@ -33,14 +32,12 @@ export default function ImportPage() {
   const [error, setError] = useState("");
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
 
-  // Manipula a seleção do arquivo
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
     }
   };
 
-  // Expande/Colapsa linhas da tabela
   const toggleExpand = (idx: number) => {
     if (expandedRow === idx) {
       setExpandedRow(null);
@@ -49,7 +46,6 @@ export default function ImportPage() {
     }
   };
 
-  // Processa o Excel (Client-Side para evitar erro 413)
   const handleProcess = async () => {
     if (!file) return;
 
@@ -59,7 +55,7 @@ export default function ImportPage() {
     setExpandedRow(null);
 
     try {
-      // Chama a função local (sem enviar para o servidor)
+      // Processamento local (Client-side) para evitar erro 413 na leitura
       const result: any = await parseExcelFile(file);
       
       if (result.success) {
@@ -83,11 +79,10 @@ export default function ImportPage() {
           Importar Faturas Antigas (Excel)
         </h1>
         <p className="text-gray-600">
-          Carregue o arquivo Excel com as múltiplas abas. O processamento é feito no seu navegador (sem limites de tamanho).
+          Carregue o arquivo Excel com as múltiplas abas. O processamento é feito no seu navegador.
         </p>
       </div>
 
-      {/* ÁREA DE UPLOAD */}
       <div className="bg-white rounded-lg shadow-md p-6 mb-8 border border-gray-100">
         <div className="flex flex-col md:flex-row gap-4 items-end">
           <div className="flex-1 w-full">
@@ -133,7 +128,6 @@ export default function ImportPage() {
         )}
       </div>
 
-      {/* RESULTADOS */}
       {data.length > 0 && (
         <div className="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200">
           <div className="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center flex-wrap gap-4">
@@ -282,7 +276,7 @@ export default function ImportPage() {
   );
 }
 
-// SUB-COMPONENTE: Botões de Ação (Salvar / Apagar)
+// --- COMPONENTE CORRIGIDO: SAVE BUTTONS ---
 function SaveButtons({ data }: { data: ExtractedData[] }) {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -291,38 +285,64 @@ function SaveButtons({ data }: { data: ExtractedData[] }) {
   const handleSave = async () => {
     if (!confirm(`Deseja salvar ${data.length} faturas no banco de dados?`))
       return;
+    
     setSaving(true);
-    setMsg("");
-    try {
-      // POST para API de salvar (o JSON é leve, não dá erro 413)
-      const res = await fetch("/api/save-invoices", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoices: data }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setMsg(`✅ Sucesso! ${json.count} faturas salvas.`);
-      } else {
-        alert("Erro ao salvar: " + json.error);
-      }
-    } catch (e) {
-      alert("Erro ao salvar");
-    } finally {
-      setSaving(false);
+    setMsg("Preparando envio...");
+
+    // CONFIGURAÇÃO DO LOTE
+    // Enviamos 50 faturas por vez para não exceder o limite de 4.5MB do Vercel
+    const CHUNK_SIZE = 50; 
+    const totalChunks = Math.ceil(data.length / CHUNK_SIZE);
+    
+    let savedCount = 0;
+    let errorCount = 0;
+
+    for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = start + CHUNK_SIZE;
+        const chunk = data.slice(start, end);
+        
+        setMsg(`Salvando lote ${i + 1} de ${totalChunks}...`);
+
+        try {
+            const res = await fetch("/api/save-invoices", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ invoices: chunk }),
+            });
+            
+            if (res.ok) {
+                const json = await res.json();
+                savedCount += (json.count || 0);
+            } else {
+                console.error(`Erro ao salvar lote ${i+1}`);
+                errorCount++;
+            }
+        } catch (e) {
+            console.error(e);
+            errorCount++;
+        }
     }
+
+    if (errorCount === 0) {
+        setMsg(`✅ Sucesso! ${savedCount} faturas salvas.`);
+    } else {
+        setMsg(`⚠️ Concluído. ${savedCount} salvas, mas ${errorCount} lotes falharam.`);
+        alert(`Processo terminado com erros. ${savedCount} faturas foram salvas.`);
+    }
+    
+    setSaving(false);
   };
 
   const handleDelete = async () => {
-    // Prompt simples para senha (podes usar o modal bonito se preferires)
     const passkey = prompt("Digite a senha de admin para apagar o histórico:");
     if (!passkey) return;
 
     setDeleting(true);
-    setMsg("");
+    setMsg("Apagando...");
     try {
       const res = await fetch("/api/delete-imported-invoices", {
-        method: "POST", // POST para enviar a senha no body
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ passkey }),
       });
@@ -331,9 +351,11 @@ function SaveButtons({ data }: { data: ExtractedData[] }) {
         setMsg(`🗑️ Sucesso! ${json.count} faturas apagadas.`);
       } else {
         alert("Erro: " + (json.error || "Senha ou erro desconhecido"));
+        setMsg("");
       }
     } catch (e) {
       alert("Erro ao apagar");
+      setMsg("");
     } finally {
       setDeleting(false);
     }
