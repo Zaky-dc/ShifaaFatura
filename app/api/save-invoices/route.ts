@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebase"; 
-import { ref, runTransaction, update } from "firebase/database";
+import { ref, update } from "firebase/database";
 
-// Force dynamic to avoid static caching issues
 export const dynamic = 'force-dynamic';
 
 interface ImportedInvoice {
@@ -11,7 +10,7 @@ interface ImportedInvoice {
   date: string;
   total: string;
   sheetName: string;
-  rawData?: any[]; // Allow rawData
+  rawData?: any[];
 }
 
 export async function POST(req: NextRequest) {
@@ -22,7 +21,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No invoices provided" }, { status: 400 });
     }
 
-    // Filter valid invoices
+    // Filtrar faturas inválidas
     const validInvoices = invoices.filter((inv: ImportedInvoice) => 
         inv.patient && inv.total && inv.patient !== "ERRO"
     );
@@ -32,33 +31,32 @@ export async function POST(req: NextRequest) {
     }
 
     const count = validInvoices.length;
-    const counterRef = ref(db, 'settings/invoiceCounter');
-
-    // 1. Reserve a block of IDs atomically
-    let startId = 0;
-    await runTransaction(counterRef, (currentValue) => {
-      // If null, assume 3977 as base
-      const current = currentValue || 3977;
-      startId = current + 1;
-      return current + count;
-    });
-
-    // 2. Prepare atomic update object
+    
+    // --- MUDANÇA PRINCIPAL AQUI ---
+    // Removemos a leitura e atualização do 'settings/invoiceCounter'.
+    // Agora geramos IDs únicos baseados no Timestamp (Data/Hora atual).
+    
     const updates: Record<string, any> = {};
+    const timestamp = Date.now();
 
     validInvoices.forEach((inv, index) => {
-        const id = startId + index;
+        // Geramos um ID único: Timestamp + Index (para garantir que não repetem no mesmo milissegundo)
+        // Ex: 1706258000000, 1706258000001, etc.
+        const id = timestamp + index; 
+        
+        // Limpar o valor total (remover "MT", vírgulas, etc)
         const cleanTotal = parseFloat(inv.total.toString().replace(/[^0-9.]/g, ''));
         const finalTotal = isNaN(cleanTotal) ? 0 : cleanTotal;
 
         const newInvoice = {
             id: id,
-            invoiceNumber: id,
+            invoiceNumber: id, // O número da fatura será este código longo
             patientName: inv.patient,
             procedureTitle: inv.procedure || "Procedimento Importado",
             date: inv.date || new Date().toISOString().split('T')[0],
             createdAt: new Date().toISOString(),
-            // Financials
+            
+            // Dados financeiros
             grandTotal: finalTotal,
             subTotal: finalTotal,
             discount: 0,
@@ -71,17 +69,18 @@ export async function POST(req: NextRequest) {
                 unitPrice: finalTotal,
                 total: finalTotal
             }],
-            // Metadata
-            source: 'excel_import',
+            
+            // Metadados importantes
+            source: 'excel_import', // Marca como importado
             originalSheet: inv.sheetName,
-            // Save raw entries for previewing later
             rawData: inv.rawData || []
         };
 
+        // Salva no caminho 'invoices/ID'
         updates[`invoices/${id}`] = newInvoice;
     });
 
-    // 3. Commit all writes at once
+    // Salvar tudo de uma vez (Batch Update)
     await update(ref(db), updates);
 
     return NextResponse.json({ success: true, count: count });
