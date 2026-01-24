@@ -9,7 +9,8 @@ import { createInvoice, updateInvoice, getInvoiceById } from "@/lib/invoiceServi
 import { 
   Plus, Trash2, Save, ArrowLeft, Phone, CreditCard, Loader2, 
   GripVertical, FileSpreadsheet, WrapText, Pin, PinOff, 
-  User, Calendar, Briefcase, Hash, Printer, LayoutTemplate
+  User, Calendar, Briefcase, Hash, Printer, LayoutTemplate,
+  EyeOff, Eye // Novos ícones
 } from "lucide-react";
 
 export default function NovaFaturaPage() {
@@ -49,6 +50,10 @@ function NovaFaturaContent() {
   const [selection, setSelection] = useState({ start: null, end: null, isSelecting: false });
   const [colWidths, setColWidths] = useState({});
   const [resizingCol, setResizingCol] = useState(null);
+
+  // --- NOVO: ESTADOS PARA OCULTAR COLUNAS ---
+  const [hiddenCols, setHiddenCols] = useState([]); // Array de índices ocultos [0, 2]
+  const [contextMenu, setContextMenu] = useState(null); // { x, y, colIndex }
 
   const [invoiceData, setInvoiceData] = useState({
     invoiceNumber: "", clientName: "", patientName: "", patientNid: "", patientContact: "",
@@ -99,20 +104,61 @@ function NovaFaturaContent() {
   // --- SELECTION & RESIZING ---
   const handleMouseDown = (r, c) => setSelection({ start: { r, c }, end: { r, c }, isSelecting: true });
   const handleMouseEnter = (r, c) => { if (selection.isSelecting) setSelection(prev => ({ ...prev, end: { r, c } })); };
-  const handleMouseUp = () => { setSelection(prev => ({ ...prev, isSelecting: false })); setResizingCol(null); setIsResizingWidth(false); setIsResizingHeight(false); document.body.style.cursor = "default"; document.body.style.userSelect = "auto"; };
+  
+  const handleMouseUp = () => { 
+      setSelection(prev => ({ ...prev, isSelecting: false })); 
+      setResizingCol(null); 
+      setIsResizingWidth(false); 
+      setIsResizingHeight(false); 
+      document.body.style.cursor = "default"; 
+      document.body.style.userSelect = "auto"; 
+  };
 
+  // --- NOVO: CONTEXT MENU HANDLERS ---
+  const handleHeaderContextMenu = (e, colIndex) => {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, colIndex });
+  };
+
+  const hideColumn = () => {
+      if (contextMenu) {
+          setHiddenCols([...hiddenCols, contextMenu.colIndex]);
+          setContextMenu(null);
+      }
+  };
+
+  // Fecha menu se clicar fora
+  useEffect(() => {
+      const closeMenu = () => setContextMenu(null);
+      window.addEventListener('click', closeMenu);
+      return () => window.removeEventListener('click', closeMenu);
+  }, []);
+
+
+  // --- COPY SHORTCUT ---
   useEffect(() => {
     const handleKeyDown = (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selection.start) {
             const startR = Math.min(selection.start.r, selection.end.r), endR = Math.max(selection.start.r, selection.end.r);
             const startC = Math.min(selection.start.c, selection.end.c), endC = Math.max(selection.start.c, selection.end.c);
-            let text = ""; for (let r = startR; r <= endR; r++) { const row = []; for (let c = startC; c <= endC; c++) row.push(invoiceData.rawData[r]?.[c] || ""); text += row.join("\t") + "\n"; }
+            let text = ""; 
+            for (let r = startR; r <= endR; r++) { 
+                const row = []; 
+                for (let c = startC; c <= endC; c++) {
+                    // Só copia se a coluna não estiver oculta
+                    if (!hiddenCols.includes(c)) {
+                        row.push(invoiceData.rawData[r]?.[c] || ""); 
+                    }
+                }
+                text += row.join("\t") + "\n"; 
+            }
             navigator.clipboard.writeText(text);
         }
     };
     window.addEventListener('keydown', handleKeyDown); return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selection, invoiceData.rawData]);
+  }, [selection, invoiceData.rawData, hiddenCols]);
 
+  // --- RESIZING HANDLERS ---
   const handleResizeMove = useCallback((e) => {
     if (isResizingWidth) { const w = (e.clientX / window.innerWidth) * 100; if (w > 25 && w < 75) setSidebarWidth(w); }
     if (isResizingHeight) { const h = window.innerHeight - e.clientY; if (h > 100 && h < window.innerHeight - 100) setExcelHeight(h); }
@@ -138,7 +184,6 @@ function NovaFaturaContent() {
     setInvoiceData({ ...invoiceData, items: newItems, grandTotal: total });
   };
 
-  // ESTA ERA A FUNÇÃO QUE FALTAVA
   const toggleDisplayMode = () => {
     const newMode = invoiceData.displayMode === "standard" ? "descriptive" : "standard";
     setInvoiceData((prev) => ({ ...prev, displayMode: newMode }));
@@ -171,9 +216,17 @@ function NovaFaturaContent() {
             <tr>
                 <th className="w-10 bg-gray-100 border-r border-b border-gray-300 font-bold text-gray-500 select-none">#</th>
                 {invoiceData.rawData[0].map((_, i) => {
+                    // LOGICA DE OCULTAR
+                    if (hiddenCols.includes(i)) return null;
+
                     const width = colWidths[i] || 120;
                     return (
-                        <th key={i} className="bg-gray-100 border-r border-b border-gray-300 px-2 py-1 font-bold text-gray-700 text-center relative select-none" style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}>
+                        <th 
+                            key={i} 
+                            className="bg-gray-100 border-r border-b border-gray-300 px-2 py-1 font-bold text-gray-700 text-center relative select-none hover:bg-gray-200" 
+                            style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
+                            onContextMenu={(e) => handleHeaderContextMenu(e, i)} // <--- RIGHT CLICK TRIGGER
+                        >
                             {getColLetter(i)}
                             <div className="absolute right-0 top-0 w-2 h-full cursor-col-resize hover:bg-green-400 opacity-0 hover:opacity-100 transition-opacity z-20" onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); setResizingCol({ index: i, startX: e.clientX, startWidth: width }); }} />
                         </th>
@@ -186,6 +239,9 @@ function NovaFaturaContent() {
                 <tr key={rIdx} className={isTextWrapped ? "" : "h-6"}>
                     <td className="bg-gray-100 border-r border-b border-gray-300 text-center text-gray-500 font-semibold select-none sticky left-0">{rIdx + 1}</td>
                     {row.map((cell, cIdx) => {
+                        // LOGICA DE OCULTAR
+                        if (hiddenCols.includes(cIdx)) return null;
+
                         const width = colWidths[cIdx] || 120; const selected = isCellSelected(rIdx, cIdx);
                         return (
                             <td key={cIdx} onMouseDown={() => handleMouseDown(rIdx, cIdx)} onMouseEnter={() => handleMouseEnter(rIdx, cIdx)}
@@ -205,6 +261,19 @@ function NovaFaturaContent() {
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 font-sans select-none md:select-auto" onMouseUp={handleMouseUp}>
       
+      {/* MENU DE CONTEXTO (Right Click) */}
+      {contextMenu && (
+          <div 
+            className="fixed bg-white border border-gray-300 shadow-xl rounded z-50 py-1 w-40 text-sm"
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            onClick={(e) => e.stopPropagation()} // Evita fechar ao clicar dentro
+          >
+              <button onClick={hideColumn} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700">
+                  <EyeOff size={14}/> Ocultar Coluna
+              </button>
+          </div>
+      )}
+
       {/* SIDEBAR */}
       <div ref={sidebarRef} className="flex flex-col h-full bg-white shadow-2xl z-20 relative border-r border-gray-200" style={{ width: `${sidebarWidth}%`, minWidth: '380px' }}>
         
@@ -351,6 +420,9 @@ function NovaFaturaContent() {
                     <div className="bg-[#107c41] text-white px-3 py-2 flex justify-between items-center select-none text-xs font-medium">
                         <div className="flex items-center gap-2"><FileSpreadsheet size={16}/> DADOS DO EXCEL</div>
                         <div className="flex items-center gap-2">
+                            {hiddenCols.length > 0 && (
+                                <button onClick={() => setHiddenCols([])} className="flex items-center gap-1 px-2 py-1 rounded border border-yellow-300 text-yellow-100 hover:text-white hover:border-white transition-colors bg-green-800"><Eye size={14}/> Mostrar Todas</button>
+                            )}
                             <button onClick={() => setIsTextWrapped(!isTextWrapped)} className="flex items-center gap-1 px-2 py-1 rounded border border-green-500 hover:bg-green-700 bg-green-800"><WrapText size={14}/> {isTextWrapped ? "Expandido" : "Cortar"}</button>
                             <button onClick={() => setIsExcelDocked(true)} className="flex items-center gap-1 px-2 py-1 rounded border bg-green-800 border-green-600 hover:bg-green-700"><Pin size={14}/> Fixar</button>
                         </div>
@@ -391,6 +463,9 @@ function NovaFaturaContent() {
             <div className="bg-[#107c41] text-white px-3 py-2 flex justify-between items-center select-none text-xs font-medium flex-shrink-0">
                 <div className="flex items-center gap-2"><FileSpreadsheet size={16}/> DADOS DO EXCEL</div>
                 <div className="flex items-center gap-2">
+                    {hiddenCols.length > 0 && (
+                        <button onClick={() => setHiddenCols([])} className="flex items-center gap-1 px-2 py-1 rounded border border-yellow-300 text-yellow-100 hover:text-white hover:border-white transition-colors bg-green-800"><Eye size={14}/> Mostrar Todas</button>
+                    )}
                     <button onClick={() => setIsTextWrapped(!isTextWrapped)} className="flex items-center gap-1 px-2 py-1 rounded border border-green-500 hover:bg-green-700 bg-green-800"><WrapText size={14}/> {isTextWrapped ? "Expandido" : "Cortar"}</button>
                     <button onClick={() => setIsExcelDocked(false)} className="flex items-center gap-1 px-2 py-1 rounded border bg-green-800 border-green-600 hover:bg-green-700"><PinOff size={14}/> Soltar</button>
                 </div>
