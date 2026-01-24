@@ -6,11 +6,14 @@ import { InvoiceTemplate } from "@/components/InvoiceTemplate";
 import { db } from "@/lib/firebase";
 import { ref, get } from "firebase/database";
 import { createInvoice, updateInvoice, getInvoiceById } from "@/lib/invoiceService";
-import { Plus, Trash2, Save, ArrowLeft, Phone, CreditCard, Loader2, GripVertical, FileSpreadsheet } from "lucide-react";
+import { 
+  Plus, Trash2, Save, ArrowLeft, Phone, CreditCard, Loader2, 
+  GripVertical, FileSpreadsheet, WrapText 
+} from "lucide-react";
 
 export default function NovaFaturaPage() {
   return (
-    <Suspense fallback={<div>Carregando...</div>}>
+    <Suspense fallback={<div>Carregando editor...</div>}>
       <NovaFaturaContent />
     </Suspense>
   );
@@ -34,7 +37,8 @@ function NovaFaturaContent() {
   const [isResizingHeight, setIsResizingHeight] = useState(false);
   const sidebarRef = useRef(null);
 
-  // Excel Selection States
+  // Excel View States
+  const [isTextWrapped, setIsTextWrapped] = useState(false); // Estado para expandir linhas
   const [selection, setSelection] = useState({ start: null, end: null, isSelecting: false });
   const tableRef = useRef(null);
 
@@ -48,10 +52,8 @@ function NovaFaturaContent() {
   // --- SMART PASTE LOGIC ---
   const handleSmartPaste = (e, fieldType, index = null) => {
     const clipboardText = e.clipboardData.getData('text');
-    // Divide linhas por \n e colunas por \t
     const rows = clipboardText.trim().split(/\r\n|\n|\r/);
     
-    // Se for apenas uma célula simples, deixa o comportamento normal
     const firstRowCols = rows[0].split('\t');
     if (rows.length === 1 && firstRowCols.length < 2) return;
 
@@ -68,10 +70,7 @@ function NovaFaturaContent() {
     }
 
     if (fieldType === 'item' && index !== null) {
-        // Se copiar múltiplas linhas do Excel, adiciona múltiplos itens
         const newItems = [...invoiceData.items];
-        
-        // Remove o item vazio atual se estivermos colando por cima
         if (newItems[index].description === "" && newItems[index].price === 0) {
             newItems.splice(index, 1);
         }
@@ -80,9 +79,7 @@ function NovaFaturaContent() {
             const cols = rowStr.split('\t');
             const isFirstNumber = !isNaN(parseFloat(cols[0]));
             
-            let qty = 1; 
-            let desc = ""; 
-            let price = 0;
+            let qty = 1; let desc = ""; let price = 0;
 
             if (isFirstNumber && cols.length > 1) {
                 qty = parseFloat(cols[0]) || 1;
@@ -92,7 +89,6 @@ function NovaFaturaContent() {
                 desc = cols[0];
                 price = cols[1] ? parseFloat(cols[1].replace(/[^0-9,.]/g, '').replace(',', '.')) : 0;
             }
-
             newItems.push({ qty, description: desc, price, total: qty * price });
         });
 
@@ -121,13 +117,11 @@ function NovaFaturaContent() {
     const handleKeyDown = (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
             if (selection.start && selection.end && invoiceData.rawData.length > 0) {
-                // Determine range
                 const startR = Math.min(selection.start.r, selection.end.r);
                 const endR = Math.max(selection.start.r, selection.end.r);
                 const startC = Math.min(selection.start.c, selection.end.c);
                 const endC = Math.max(selection.start.c, selection.end.c);
 
-                // Build TSV string
                 let textToCopy = "";
                 for (let r = startR; r <= endR; r++) {
                     const rowData = [];
@@ -137,7 +131,6 @@ function NovaFaturaContent() {
                     }
                     textToCopy += rowData.join("\t") + "\n";
                 }
-
                 navigator.clipboard.writeText(textToCopy);
             }
         }
@@ -155,7 +148,7 @@ function NovaFaturaContent() {
       return r >= minR && r <= maxR && c >= minC && c <= maxC;
   };
 
-  // --- RESIZING & DATA LOADING (Mantidos do anterior) ---
+  // --- RESIZING LOGIC ---
   const handleResizeMove = useCallback((e) => {
     if (isResizingWidth) {
       const newWidth = (e.clientX / window.innerWidth) * 100;
@@ -186,6 +179,7 @@ function NovaFaturaContent() {
     };
   }, [isResizingWidth, isResizingHeight, handleResizeMove, handleResizeUp]);
 
+  // --- DATA LOADING ---
   useEffect(() => {
     if (!invoiceId || mode === 'clone') {
         get(ref(db, 'settings/invoiceCounter')).then(s => setNextNumberPreview((s.val() || 3977) + 1));
@@ -203,7 +197,7 @@ function NovaFaturaContent() {
     }
   }, [invoiceId, mode]);
 
-  // --- HANDLERS (Save, Print, Changes) ---
+  // --- HANDLERS ---
   const handleItemChange = (index, field, value) => {
     const newItems = [...invoiceData.items];
     const item = newItems[index];
@@ -305,17 +299,24 @@ function NovaFaturaContent() {
         {/* === EXCEL PANEL (Bottom Docked) === */}
         {hasExcel && (
           <div className="flex-shrink-0 border-t-4 border-green-600 bg-white relative flex flex-col shadow-[0_-10px_25px_rgba(0,0,0,0.15)]" style={{ height: `${excelHeight}px` }}>
-            {/* Drag Handle */}
             <div onMouseDown={() => { setIsResizingHeight(true); document.body.style.cursor = "row-resize"; }} className="absolute -top-3 left-0 w-full h-6 cursor-row-resize flex justify-center items-center group z-30"><div className="w-16 h-1.5 bg-gray-300 group-hover:bg-green-600 rounded-full border border-white shadow-sm"></div></div>
             
-            {/* Excel Header */}
             <div className="bg-[#107c41] text-white px-2 py-1 flex justify-between items-center select-none text-[10px]">
                 <div className="flex items-center gap-1 font-bold"><FileSpreadsheet size={12}/> EXCEL DATA</div>
-                <span className="opacity-80">Selecione e copie (Ctrl+C)</span>
+                <div className="flex items-center gap-2">
+                    <button 
+                        onClick={() => setIsTextWrapped(!isTextWrapped)}
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded border ${isTextWrapped ? 'bg-white text-green-700' : 'bg-green-700 text-white border-green-500'}`}
+                        title="Quebrar texto longo (Expandir linhas)"
+                    >
+                        <WrapText size={12}/> {isTextWrapped ? "Expandido" : "Quebrar Texto"}
+                    </button>
+                    <span className="opacity-80">Ctrl+C para copiar</span>
+                </div>
             </div>
 
-            {/* Excel Table */}
-            <div className="overflow-auto flex-grow bg-gray-100 custom-scrollbar relative" onMouseLeave={handleMouseUp}>
+            {/* AQUI ESTÁ A CORREÇÃO: pb-12 para o scroll não cortar o fim */}
+            <div className="overflow-auto flex-grow bg-gray-100 custom-scrollbar relative pb-12" onMouseLeave={handleMouseUp}>
                 <table className="border-collapse w-full text-[11px] font-sans bg-white cursor-cell table-fixed">
                     <thead className="sticky top-0 z-10">
                         <tr>
@@ -327,7 +328,7 @@ function NovaFaturaContent() {
                     </thead>
                     <tbody ref={tableRef}>
                         {invoiceData.rawData.map((row, rIdx) => (
-                            <tr key={rIdx} className="h-5">
+                            <tr key={rIdx} className={isTextWrapped ? "" : "h-5"}>
                                 <td className="bg-gray-100 border-r border-b border-gray-300 text-center text-gray-500 select-none">{rIdx + 1}</td>
                                 {row.map((cell, cIdx) => {
                                     const selected = isCellSelected(rIdx, cIdx);
@@ -335,11 +336,13 @@ function NovaFaturaContent() {
                                         <td key={cIdx} 
                                             onMouseDown={() => handleMouseDown(rIdx, cIdx)}
                                             onMouseEnter={() => handleMouseEnter(rIdx, cIdx)}
-                                            className={`border-r border-b border-gray-300 px-2 py-0.5 whitespace-nowrap overflow-hidden text-ellipsis relative
-                                                ${selected ? 'bg-green-100 border-green-500 border-double' : ''}`}
+                                            className={`border-r border-b border-gray-300 px-2 py-0.5 relative
+                                                ${isTextWrapped ? 'whitespace-pre-wrap break-words align-top h-auto' : 'whitespace-nowrap overflow-hidden text-ellipsis h-5'}
+                                                ${selected ? 'bg-green-100 border-green-500 border-double z-10' : ''}`}
                                             style={{ 
                                                 cursor: "url('data:image/svg+xml;utf8,<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M12 2V22M2 12H22\" stroke=\"white\" stroke-width=\"3\" filter=\"drop-shadow(0px 0px 1px black)\"/></svg>') 12 12, cell" 
                                             }}
+                                            title={String(cell)}
                                         >
                                             {String(cell)}
                                         </td>
