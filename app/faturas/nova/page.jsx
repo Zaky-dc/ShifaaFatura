@@ -59,9 +59,8 @@ function NovaFaturaContent() {
 
   // --- CONFIGURAÇÃO DE IMPRESSÃO ---
   const handlePrint = useReactToPrint({
-    contentRef: componentRef, // Nova sintaxe para react-to-print mais recente
+    contentRef: componentRef,
     documentTitle: `Proforma_${invoiceData.clientName || "Documento"}`,
-    // Força A4 e remove margens padrão do browser
     pageStyle: `
       @page { size: A4; margin: 0mm; } 
       @media print { 
@@ -71,9 +70,7 @@ function NovaFaturaContent() {
     `,
   });
 
-  // --- LOGICA DE DADOS, EXCEL, PASTE E RESIZE (MANTIDA IGUAL) ---
-  // (Esta lógica é a mesma que já aprovaste, mantive para garantir que o backend funciona)
-  
+  // --- SMART PASTE ---
   const handleSmartPaste = (e, fieldType, index = null) => {
     const clipboardText = e.clipboardData.getData('text');
     const rows = clipboardText.trim().split(/\r\n|\n|\r/);
@@ -99,6 +96,7 @@ function NovaFaturaContent() {
     }
   };
 
+  // --- SELECTION & RESIZING ---
   const handleMouseDown = (r, c) => setSelection({ start: { r, c }, end: { r, c }, isSelecting: true });
   const handleMouseEnter = (r, c) => { if (selection.isSelecting) setSelection(prev => ({ ...prev, end: { r, c } })); };
   const handleMouseUp = () => { setSelection(prev => ({ ...prev, isSelecting: false })); setResizingCol(null); setIsResizingWidth(false); setIsResizingHeight(false); document.body.style.cursor = "default"; document.body.style.userSelect = "auto"; };
@@ -106,7 +104,6 @@ function NovaFaturaContent() {
   useEffect(() => {
     const handleKeyDown = (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selection.start) {
-            // Lógica de cópia (simplificada para brevidade, igual à anterior)
             const startR = Math.min(selection.start.r, selection.end.r), endR = Math.max(selection.start.r, selection.end.r);
             const startC = Math.min(selection.start.c, selection.end.c), endC = Math.max(selection.start.c, selection.end.c);
             let text = ""; for (let r = startR; r <= endR; r++) { const row = []; for (let c = startC; c <= endC; c++) row.push(invoiceData.rawData[r]?.[c] || ""); text += row.join("\t") + "\n"; }
@@ -124,6 +121,7 @@ function NovaFaturaContent() {
 
   useEffect(() => { if (isResizingWidth || isResizingHeight || resizingCol) { window.addEventListener("mousemove", handleResizeMove); window.addEventListener("mouseup", handleMouseUp); document.body.style.userSelect = "none"; } return () => { window.removeEventListener("mousemove", handleResizeMove); window.removeEventListener("mouseup", handleMouseUp); }; }, [isResizingWidth, isResizingHeight, resizingCol, handleResizeMove]);
 
+  // --- DATA LOADING ---
   useEffect(() => {
     if (!invoiceId || mode === 'clone') get(ref(db, 'settings/invoiceCounter')).then(s => setNextNumberPreview((s.val() || 3977) + 1));
     if (invoiceId) { setLoading(true); getInvoiceById(invoiceId).then(data => { if (data) { 
@@ -132,13 +130,22 @@ function NovaFaturaContent() {
     } setLoading(false); }); }
   }, [invoiceId, mode]);
 
+  // --- FORM HANDLERS ---
   const handleItemChange = (index, field, value) => {
     const newItems = [...invoiceData.items]; const item = newItems[index]; item[field] = value;
     if (invoiceData.displayMode === "standard" && (field === "qty" || field === "price")) item.total = (parseFloat(item.qty) || 0) * (parseFloat(item.price) || 0);
     const total = newItems.reduce((acc, curr) => acc + (curr.total || 0), 0);
     setInvoiceData({ ...invoiceData, items: newItems, grandTotal: total });
   };
+
+  // ESTA ERA A FUNÇÃO QUE FALTAVA
+  const toggleDisplayMode = () => {
+    const newMode = invoiceData.displayMode === "standard" ? "descriptive" : "standard";
+    setInvoiceData((prev) => ({ ...prev, displayMode: newMode }));
+  };
+
   const addItem = () => setInvoiceData({ ...invoiceData, items: [...invoiceData.items, { qty: 1, description: "", price: 0, total: 0 }] });
+  
   const removeItem = (i) => { const items = invoiceData.items.filter((_, idx) => idx !== i); const total = items.reduce((acc, curr) => acc + (curr.total || 0), 0); setInvoiceData({ ...invoiceData, items, grandTotal: total }); };
   
   const handleSave = async () => {
