@@ -101,7 +101,7 @@ export const InvoiceTemplate = forwardRef(({ data }, ref) => {
           <div className="mt-8 px-4 pb-12 text-[10px]">
             <p className="font-bold mb-1">Observação</p>
             <p className="mb-1">1 O valor cotado não inclui custos resultantes de complicações...</p>
-            <p>2 O Valor por facturar é regularmente actualizado...</p>
+            <p>2 O Valor por facturar é regularmente actualizado, ao longo da estadia, e finalmente apurado aquando da alta hospitalar.<br/> </p>
           </div>
 
           <div className="border-t-2 border-gray-600 flex bg-gray-100 absolute bottom-0 w-full">
