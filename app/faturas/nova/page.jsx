@@ -18,7 +18,7 @@ import {
   Phone,
   CreditCard,
   Loader2,
-  GripVertical, // Ícone para a pega lateral
+  GripVertical,
   Maximize2
 } from "lucide-react";
 
@@ -41,11 +41,9 @@ function NovaFaturaContent() {
   const [loading, setLoading] = useState(false);
   const [nextNumberPreview, setNextNumberPreview] = useState(null);
 
-  // --- ESTADOS DE LAYOUT (RESIZING) ---
-  // width em percentagem (%), height em pixels (px)
-  const [sidebarWidth, setSidebarWidth] = useState(45); 
-  const [excelHeight, setExcelHeight] = useState(300); 
-  
+  // --- LAYOUT STATES ---
+  const [sidebarWidth, setSidebarWidth] = useState(45);
+  const [excelHeight, setExcelHeight] = useState(300);
   const [isResizingWidth, setIsResizingWidth] = useState(false);
   const [isResizingHeight, setIsResizingHeight] = useState(false);
   const sidebarRef = useRef(null);
@@ -62,28 +60,72 @@ function NovaFaturaContent() {
     grandTotal: 0,
     items: [{ qty: 1, description: "Consulta", price: 0, total: 0 }],
     displayMode: "standard",
-    rawData: [], // Dados do Excel
+    rawData: [],
   });
 
-  // --- LÓGICA DE RESIZE (GLOBAL) ---
+  // --- SMART PASTE LOGIC (A MÁGICA) ---
+  const handleSmartPaste = (e, fieldType, index = null) => {
+    // Pega o texto da área de transferência
+    const clipboardText = e.clipboardData.getData('text');
+    
+    // O Excel separa células com TAB (\t)
+    const values = clipboardText.split('\t').map(v => v.trim());
+
+    // Se só tiver 1 valor, deixa o comportamento normal do navegador
+    if (values.length < 2) return;
+
+    e.preventDefault(); // Impede a colagem normal para fazermos a nossa
+
+    // CASO 1: Colar Dados do Paciente (Nome -> NID -> Contacto)
+    if (fieldType === 'patient') {
+        setInvoiceData(prev => ({
+            ...prev,
+            patientName: values[0] || prev.patientName,
+            patientNid: values[1] || prev.patientNid, // Assume que a 2ª célula é NID
+            patientContact: values[2] || prev.patientContact // Assume que a 3ª é Contacto
+        }));
+    }
+
+    // CASO 2: Colar na Linha de Itens (Qtd -> Descrição -> Preço)
+    if (fieldType === 'item' && index !== null) {
+        const newItems = [...invoiceData.items];
+        const item = newItems[index];
+
+        // Tenta adivinhar a ordem baseado no Excel: Qtd | Descricao | Preço
+        // Se o primeiro valor for número, assume Qtd. Se não, assume Descrição.
+        const isFirstNumber = !isNaN(parseFloat(values[0]));
+
+        if (isFirstNumber) {
+            item.qty = parseFloat(values[0]) || 1;
+            item.description = values[1] || "";
+            // Limpa formatação de moeda "2.000,00 MT" -> 2000.00
+            const cleanPrice = values[2] ? parseFloat(values[2].replace(/[^0-9,.]/g, '').replace(',', '.')) : 0;
+            item.price = cleanPrice;
+        } else {
+            // Se copiou só Descrição e Preço
+            item.description = values[0];
+            const cleanPrice = values[1] ? parseFloat(values[1].replace(/[^0-9,.]/g, '').replace(',', '.')) : 0;
+            item.price = cleanPrice;
+        }
+
+        // Recalcula total da linha
+        item.total = (item.qty || 0) * (item.price || 0);
+        
+        // Atualiza estado e total global
+        const newGrandTotal = newItems.reduce((acc, curr) => acc + (curr.total || 0), 0);
+        setInvoiceData(prev => ({ ...prev, items: newItems, grandTotal: newGrandTotal }));
+    }
+  };
+
+  // --- RESIZING LOGIC ---
   const handleMouseMove = useCallback((e) => {
-    // 1. Redimensionar Largura da Sidebar
     if (isResizingWidth) {
       const newWidth = (e.clientX / window.innerWidth) * 100;
-      // Limites: Mínimo 25%, Máximo 75% da tela
-      if (newWidth > 25 && newWidth < 75) { 
-        setSidebarWidth(newWidth);
-      }
+      if (newWidth > 25 && newWidth < 75) setSidebarWidth(newWidth);
     }
-    
-    // 2. Redimensionar Altura do Painel Excel
     if (isResizingHeight) {
-      // Calcula a altura baseada na distância do mouse ao fundo da tela
       const newHeight = window.innerHeight - e.clientY;
-      // Limites: Mínimo 100px, Máximo (Altura da janela - 200px para sobrar pro form)
-      if (newHeight > 100 && newHeight < window.innerHeight - 200) {
-        setExcelHeight(newHeight);
-      }
+      if (newHeight > 100 && newHeight < window.innerHeight - 200) setExcelHeight(newHeight);
     }
   }, [isResizingWidth, isResizingHeight]);
 
@@ -91,15 +133,13 @@ function NovaFaturaContent() {
     setIsResizingWidth(false);
     setIsResizingHeight(false);
     document.body.style.cursor = "default";
-    document.body.style.userSelect = "auto"; // Reativa seleção de texto
+    document.body.style.userSelect = "auto";
   }, []);
 
-  // Adiciona listeners globais quando o drag começa
   useEffect(() => {
     if (isResizingWidth || isResizingHeight) {
       window.addEventListener("mousemove", handleMouseMove);
       window.addEventListener("mouseup", handleMouseUp);
-      // Desativa seleção para não "pintar" texto azul enquanto arrasta
       document.body.style.userSelect = "none"; 
     }
     return () => {
@@ -108,8 +148,7 @@ function NovaFaturaContent() {
     };
   }, [isResizingWidth, isResizingHeight, handleMouseMove, handleMouseUp]);
 
-
-  // --- CARREGAMENTO DE DADOS ---
+  // --- DATA LOADING ---
   useEffect(() => {
     if (!invoiceId || mode === 'clone') {
         const fetchNextNumber = async () => {
@@ -117,9 +156,7 @@ function NovaFaturaContent() {
                 const snapshot = await get(ref(db, 'settings/invoiceCounter'));
                 const current = snapshot.exists() ? snapshot.val() : 3977;
                 setNextNumberPreview(current + 1);
-            } catch (e) {
-                console.error("Erro ao ler contador", e);
-            }
+            } catch (e) { console.error(e); }
         };
         fetchNextNumber();
     }
@@ -130,31 +167,15 @@ function NovaFaturaContent() {
       if (!invoiceId) return;
       setLoading(true);
       const data = await getInvoiceById(invoiceId);
-
       if (data) {
         const safeData = {
-          invoiceNumber: "",
-          clientName: "",
-          patientName: "",
-          patientNid: "",
-          patientContact: "",
-          date: new Date().toISOString().split("T")[0],
-          dueDate: "",
-          procedureTitle: "",
-          grandTotal: 0,
+          invoiceNumber: "", clientName: "", patientName: "", patientNid: "", patientContact: "",
+          date: new Date().toISOString().split("T")[0], dueDate: "", procedureTitle: "", grandTotal: 0,
           items: [{ qty: 1, description: "Consulta", price: 0, total: 0 }],
-          displayMode: "standard",
-          rawData: [],
-          ...data,
+          displayMode: "standard", rawData: [], ...data,
         };
-
         if (mode === "clone") {
-          setInvoiceData({
-            ...safeData,
-            invoiceNumber: "",
-            date: new Date().toISOString().split("T")[0],
-            dueDate: "",
-          });
+          setInvoiceData({ ...safeData, invoiceNumber: "", date: new Date().toISOString().split("T")[0], dueDate: "" });
         } else if (mode === "edit") {
           setInvoiceData(safeData);
         }
@@ -164,12 +185,11 @@ function NovaFaturaContent() {
     loadInvoice();
   }, [invoiceId, mode]);
 
-  // --- FUNÇÕES DO FORMULÁRIO ---
+  // --- FORM HANDLERS ---
   const handleItemChange = (index, field, value) => {
     const newItems = [...invoiceData.items];
     const item = newItems[index];
     item[field] = value;
-
     if (invoiceData.displayMode === "standard") {
       if (field === "qty" || field === "price") {
         const q = parseFloat(item.qty) || 0;
@@ -189,10 +209,7 @@ function NovaFaturaContent() {
   };
 
   const addItem = () => {
-    setInvoiceData({
-      ...invoiceData,
-      items: [...invoiceData.items, { qty: 1, description: "", price: 0, total: 0 }],
-    });
+    setInvoiceData({ ...invoiceData, items: [...invoiceData.items, { qty: 1, description: "", price: 0, total: 0 }] });
   };
 
   const removeItem = (index) => {
@@ -212,36 +229,34 @@ function NovaFaturaContent() {
     try {
       if (mode === "edit" && invoiceData.invoiceNumber) {
         await updateInvoice(invoiceData.invoiceNumber, invoiceData);
-        alert("Fatura atualizada com sucesso!");
+        alert("Atualizado com sucesso!");
         window.location.href = "/";
       } else {
         const newInvoiceData = { ...invoiceData };
-        delete newInvoiceData.source;
-        delete newInvoiceData.id;
-        const num = await createInvoice(newInvoiceData);
-        alert(`Fatura ${num} gerada com sucesso!`);
+        delete newInvoiceData.source; delete newInvoiceData.id;
+        await createInvoice(newInvoiceData);
+        alert(`Gerado com sucesso!`);
         window.location.href = "/";
       }
-    } catch (e) {
-      console.error(e);
-      alert("Erro ao salvar: " + e.message);
-    }
+    } catch (e) { alert("Erro ao salvar: " + e.message); }
     setLoading(false);
   };
 
-  // Verifica se há dados para mostrar no painel inferior
   const hasExcelData = invoiceData.rawData && invoiceData.rawData.length > 0;
+
+  // Helper para gerar letras de colunas (0 -> A, 1 -> B)
+  const getColumnLetter = (idx) => String.fromCharCode(65 + idx);
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-100 font-sans select-none md:select-auto">
       
-      {/* === 1. SIDEBAR (FORMULÁRIO + EXCEL DOCKED) === */}
+      {/* === SIDEBAR === */}
       <div 
         ref={sidebarRef}
         className="flex flex-col h-full bg-white shadow-2xl z-20 relative"
         style={{ width: `${sidebarWidth}%`, minWidth: '350px' }}
       >
-        {/* Cabeçalho */}
+        {/* HEADER */}
         <div className="p-4 border-b flex justify-between items-center bg-gray-50 flex-shrink-0">
           <button onClick={() => (window.location.href = "/")} className="text-gray-500 hover:text-gray-800 flex items-center gap-1 text-sm font-medium">
             <ArrowLeft size={16} /> Voltar
@@ -258,14 +273,13 @@ function NovaFaturaContent() {
           </div>
         </div>
 
-        {/* Formulário (Scrollável e Flexível) */}
-        {/* 'flex-grow' faz ele ocupar todo o espaço que não é usado pelo Header, Footer e Excel */}
+        {/* FORMULÁRIO */}
         <div className="flex-grow overflow-y-auto p-6 space-y-4 pb-10"> 
           
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-bold text-gray-500 mb-1">Seguradora / Cliente</label>
-              <input type="text" className="w-full border border-gray-300 p-2 rounded text-sm bg-blue-50 focus:bg-white"
+              <label className="block text-xs font-bold text-gray-500 mb-1">Cliente / Seguro</label>
+              <input type="text" className="w-full border border-gray-300 p-2 rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                 value={invoiceData.clientName}
                 onChange={(e) => setInvoiceData({ ...invoiceData, clientName: e.target.value })}
                 placeholder="Ex: Mediplus"
@@ -273,10 +287,12 @@ function NovaFaturaContent() {
             </div>
             <div>
               <label className="block text-xs font-bold text-gray-500 mb-1">Nome Paciente *</label>
-              <input type="text" className="w-full border border-gray-300 p-2 rounded text-sm font-semibold"
+              <input type="text" className="w-full border border-gray-300 p-2 rounded text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none"
                 value={invoiceData.patientName}
                 onChange={(e) => setInvoiceData({ ...invoiceData, patientName: e.target.value })}
-                placeholder="Nome completo"
+                onPaste={(e) => handleSmartPaste(e, 'patient')} // <--- SMART PASTE AQUI
+                placeholder="Cole aqui (Nome + NID + Contacto)"
+                title="Dica: Copie 3 células do Excel (Nome, NID, Contacto) e cole aqui!"
               />
             </div>
           </div>
@@ -317,12 +333,9 @@ function NovaFaturaContent() {
             </div>
           </div>
 
-          <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 flex items-center justify-between">
-            <div className="flex flex-col">
-              <span className="text-sm font-bold text-blue-800">Modo de Exibição</span>
-              <span className="text-xs text-blue-600">{invoiceData.displayMode === "standard" ? "Detalhado" : "Descritivo"}</span>
-            </div>
-            <button onClick={toggleDisplayMode} className="px-4 py-2 rounded-full text-xs font-bold bg-blue-600 text-white">Alternar</button>
+          <div className="bg-blue-50 p-2 rounded flex justify-between items-center">
+             <span className="text-xs text-blue-800 font-bold ml-2">Modo: {invoiceData.displayMode === "standard" ? "Detalhado" : "Descritivo"}</span>
+             <button onClick={toggleDisplayMode} className="text-xs bg-white border border-blue-200 px-3 py-1 rounded text-blue-600 font-bold hover:bg-blue-100">Alternar</button>
           </div>
 
           <div>
@@ -340,12 +353,17 @@ function NovaFaturaContent() {
               {invoiceData.items.map((item, index) => (
                 <div key={index} className="flex gap-2 items-start bg-gray-50 p-2 rounded border border-gray-200 hover:border-blue-300 transition-colors">
                   <div className="w-14">
-                    <input type={invoiceData.displayMode === "standard" ? "number" : "text"} className="w-full border p-1 rounded text-center text-xs"
-                      placeholder="Qtd" value={item.qty || ""} onChange={(e) => handleItemChange(index, "qty", e.target.value)}
+                    <input 
+                      type={invoiceData.displayMode === "standard" ? "number" : "text"} 
+                      className="w-full border p-1 rounded text-center text-xs focus:ring-2 focus:ring-blue-500 outline-none"
+                      placeholder="Qtd" value={item.qty || ""} 
+                      onChange={(e) => handleItemChange(index, "qty", e.target.value)}
+                      onPaste={(e) => handleSmartPaste(e, 'item', index)} // <--- SMART PASTE AQUI
+                      title="Copie (Qtd + Descrição + Preço) do Excel e cole aqui"
                     />
                   </div>
                   <div className="flex-grow">
-                    <textarea rows={1} className="w-full border p-1 rounded text-xs resize-y" placeholder="Descrição"
+                    <textarea rows={1} className="w-full border p-1 rounded text-xs resize-y focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Descrição"
                       value={item.description || ""} onChange={(e) => handleItemChange(index, "description", e.target.value)}
                     />
                   </div>
@@ -364,70 +382,78 @@ function NovaFaturaContent() {
           </div>
         </div>
 
-        {/* Rodapé Fixo (Total + Botões) */}
+        {/* FOOTER */}
         <div className="border-t p-4 bg-white shadow-lg z-20 flex-shrink-0">
           <div className="flex justify-between items-center mb-3 bg-gray-800 text-white p-3 rounded-lg">
-            <span className="text-xs font-medium uppercase text-gray-300">Total Global</span>
+            <span className="text-xs font-medium uppercase text-gray-300">Total</span>
             {invoiceData.displayMode === "standard" ? (
               <span className="text-xl font-bold tracking-tight">{invoiceData.grandTotal.toLocaleString("pt-PT")} MT</span>
             ) : (
               <input type="number" value={invoiceData.grandTotal} onChange={(e) => setInvoiceData({ ...invoiceData, grandTotal: parseFloat(e.target.value) || 0 })}
-                className="bg-gray-700 text-white font-bold text-xl w-40 p-1 rounded text-right border border-gray-600 focus:border-white outline-none"
+                className="bg-gray-700 text-white font-bold text-xl w-32 p-1 rounded text-right border-none outline-none"
               />
             )}
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <button onClick={handleSave} disabled={loading} className="bg-green-600 hover:bg-green-700 text-white p-3 rounded-lg font-bold flex justify-center gap-2 items-center text-sm">
-              {loading ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />} {loading ? "..." : "Salvar"}
+            <button onClick={handleSave} disabled={loading} className="bg-green-600 hover:bg-green-700 text-white p-2 rounded font-bold text-sm flex justify-center items-center gap-2">
+              {loading ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />} Salvar
             </button>
-            <button onClick={() => handlePrint()} className="bg-blue-800 hover:bg-blue-900 text-white p-3 rounded-lg font-bold flex justify-center gap-2 items-center text-sm">
+            <button onClick={() => handlePrint()} className="bg-blue-800 hover:bg-blue-900 text-white p-2 rounded font-bold text-sm">
               Imprimir
             </button>
           </div>
         </div>
 
-        {/* --- PAINEL EXCEL DOCKED (Fixo no fundo se houver dados) --- */}
+        {/* --- EXCEL PANEL (ESTILO EXCEL REAL) --- */}
         {hasExcelData && (
           <div 
-            className="flex-shrink-0 border-t-4 border-blue-500 bg-yellow-50 relative flex flex-col shadow-[0_-10px_25px_rgba(0,0,0,0.15)] transition-height duration-100 ease-out"
+            className="flex-shrink-0 border-t-4 border-green-600 bg-white relative flex flex-col shadow-[0_-10px_25px_rgba(0,0,0,0.15)] transition-height duration-100 ease-out"
             style={{ height: `${excelHeight}px` }}
           >
-            {/* PEGA DE ARRASTO SUPERIOR (Para aumentar altura do Excel) */}
+            {/* DRAG HANDLE */}
             <div 
-              onMouseDown={(e) => { 
-                  e.preventDefault(); // Impede seleção
-                  setIsResizingHeight(true); 
-                  document.body.style.cursor = "row-resize"; 
-              }}
+              onMouseDown={(e) => { e.preventDefault(); setIsResizingHeight(true); document.body.style.cursor = "row-resize"; }}
               className="absolute -top-3 left-0 w-full h-6 cursor-row-resize flex justify-center items-center group z-30 hover:scale-105 transition-transform"
-              title="Arraste para cima/baixo"
             >
-               <div className="w-16 h-1.5 bg-gray-300 group-hover:bg-blue-500 rounded-full shadow-sm border border-white"></div>
+               <div className="w-16 h-1.5 bg-gray-300 group-hover:bg-green-600 rounded-full shadow-sm border border-white"></div>
             </div>
 
-            <div className="p-2 bg-yellow-100 border-b border-yellow-200 flex justify-between items-center text-xs font-bold text-gray-700 uppercase tracking-wider shrink-0">
-              <div className="flex items-center gap-2">
-                <span>📋</span> Dados do Excel
-              </div>
-              <span className="text-[10px] text-gray-500 font-normal normal-case opacity-70">
-                Arraste a barra azul para redimensionar
-              </span>
+            {/* BARRA DE TÍTULO EXCEL */}
+            <div className="bg-[#107c41] text-white flex justify-between items-center px-3 py-1 select-none">
+                <div className="flex items-center gap-2 text-xs font-semibold">
+                    <FileSpreadsheet size={14} className="text-white"/> Visualização Excel
+                </div>
+                <span className="text-[10px] opacity-80">Segure Shift para selecionar múltiplas células</span>
             </div>
 
-            <div className="overflow-auto p-2 flex-grow custom-scrollbar bg-white">
-              <table className="min-w-full text-xs divide-y divide-gray-100 border-collapse">
-                <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+            {/* TABELA ESTILO EXCEL */}
+            <div className="overflow-auto flex-grow custom-scrollbar bg-gray-100">
+              <table className="border-collapse w-full text-xs font-sans bg-white">
+                <thead className="sticky top-0 z-10">
                     <tr>
-                        <th className="p-2 border border-gray-200 font-bold text-gray-500 bg-gray-50 w-10">#</th>
-                        <th className="p-2 border border-gray-200 font-bold text-gray-500 text-left bg-gray-50">Conteúdo Original</th>
+                        {/* Canto superior esquerdo */}
+                        <th className="bg-gray-100 border-r border-b border-gray-300 w-10 min-w-[40px]"></th>
+                        {/* Gera colunas A, B, C, D dinamicamente baseado na maior linha */}
+                        {invoiceData.rawData[0] && invoiceData.rawData[0].map((_, i) => (
+                            <th key={i} className="bg-gray-100 border-r border-b border-gray-300 px-2 py-1 font-normal text-gray-600 min-w-[80px]">
+                                {getColumnLetter(i)}
+                            </th>
+                        ))}
                     </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody>
                   {invoiceData.rawData.map((rData, rIdx) => (
-                    <tr key={rIdx} className="hover:bg-yellow-50 transition-colors group">
-                      <td className="w-8 p-1.5 bg-gray-50 text-gray-400 font-mono text-center border select-none group-hover:text-gray-600">{rIdx + 1}</td>
+                    <tr key={rIdx} className="h-6">
+                      {/* Número da Linha (1, 2, 3...) */}
+                      <td className="bg-gray-100 border-r border-b border-gray-300 text-center text-gray-600 font-normal select-none w-10">
+                          {rIdx + 1}
+                      </td>
+                      {/* Células de Dados */}
                       {rData.map((cell, cIdx) => (
-                        <td key={cIdx} className="p-1.5 border whitespace-pre-wrap align-top text-gray-700 select-all hover:bg-blue-50 cursor-text" title="Copiar">
+                        <td key={cIdx} 
+                            className="border-r border-b border-gray-300 px-2 py-0.5 whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px] cursor-cell hover:border-2 hover:border-green-500 hover:z-10 relative selection:bg-green-100 selection:text-green-900"
+                            title={String(cell)}
+                        >
                           {String(cell)}
                         </td>
                       ))}
@@ -441,19 +467,15 @@ function NovaFaturaContent() {
 
       </div>
 
-      {/* === 2. DRAG HANDLE VERTICAL (Para alargar a sidebar) === */}
+      {/* --- DRAG HANDLE VERTICAL --- */}
       <div
         className="w-4 bg-gray-200 hover:bg-blue-400 cursor-col-resize flex items-center justify-center transition-all z-30 shadow-lg border-l border-r border-gray-300 relative group"
-        onMouseDown={(e) => { 
-            e.preventDefault();
-            setIsResizingWidth(true); 
-            document.body.style.cursor = "col-resize"; 
-        }}
+        onMouseDown={(e) => { e.preventDefault(); setIsResizingWidth(true); document.body.style.cursor = "col-resize"; }}
       >
-         <GripVertical size={16} className="text-gray-400 group-hover:text-white transform transition-transform group-hover:scale-125" />
+         <GripVertical size={16} className="text-gray-400 group-hover:text-white" />
       </div>
 
-      {/* === 3. PREVIEW (Lado Direito) === */}
+      {/* --- PREVIEW --- */}
       <div className="flex-1 bg-gray-600 overflow-y-auto flex justify-center p-8 custom-scrollbar">
         <div className="scale-[0.8] origin-top shadow-2xl transition-transform duration-300 ease-in-out hover:scale-[0.85]">
           <InvoiceTemplate ref={componentRef} data={invoiceData} />
@@ -462,4 +484,18 @@ function NovaFaturaContent() {
 
     </div>
   );
+}
+
+// Ícone Auxiliar que faltava no import
+function FileSpreadsheet({size, className}) {
+    return (
+        <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+            <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>
+            <path d="M14 2v4a2 2 0 0 0 2 2h4"/>
+            <path d="M8 13h2"/>
+            <path d="M8 17h2"/>
+            <path d="M14 13h2"/>
+            <path d="M14 17h2"/>
+        </svg>
+    )
 }
