@@ -37,10 +37,13 @@ function NovaFaturaContent() {
   const [isResizingHeight, setIsResizingHeight] = useState(false);
   
   // Excel View States
-  const [isExcelDocked, setIsExcelDocked] = useState(true); // Controla se o Excel está fixo ou solto
+  const [isExcelDocked, setIsExcelDocked] = useState(true);
   const [isTextWrapped, setIsTextWrapped] = useState(true); 
   const [selection, setSelection] = useState({ start: null, end: null, isSelecting: false });
+  
+  // REFS IMPORTANTES
   const sidebarRef = useRef(null);
+  const tableRef = useRef(null); // <--- O tableRef está aqui e agora será visível
 
   const [invoiceData, setInvoiceData] = useState({
     invoiceNumber: "", clientName: "", patientName: "", patientNid: "", patientContact: "",
@@ -55,7 +58,7 @@ function NovaFaturaContent() {
     const rows = clipboardText.trim().split(/\r\n|\n|\r/);
     const firstRowCols = rows[0].split('\t');
     
-    if (rows.length === 1 && firstRowCols.length < 2) return; // Comportamento normal se não for tabela
+    if (rows.length === 1 && firstRowCols.length < 2) return;
 
     e.preventDefault();
 
@@ -168,6 +171,7 @@ function NovaFaturaContent() {
     };
   }, [isResizingWidth, isResizingHeight, handleResizeMove, handleResizeUp]);
 
+  // --- DATA LOADING ---
   useEffect(() => {
     if (!invoiceId || mode === 'clone') {
         get(ref(db, 'settings/invoiceCounter')).then(s => setNextNumberPreview((s.val() || 3977) + 1));
@@ -185,6 +189,7 @@ function NovaFaturaContent() {
     }
   }, [invoiceId, mode]);
 
+  // --- HANDLERS ---
   const handleItemChange = (index, field, value) => {
     const newItems = [...invoiceData.items];
     const item = newItems[index];
@@ -217,76 +222,6 @@ function NovaFaturaContent() {
   const getColLetter = (i) => String.fromCharCode(65 + i);
   const hasExcel = invoiceData.rawData && invoiceData.rawData.length > 0;
 
-  // COMPONENTE DO EXCEL (Reutilizável)
-  const ExcelPanel = () => (
-    <div className={`flex flex-col bg-white shadow-inner ${isExcelDocked ? 'h-full' : 'min-h-[400px] border-t-4 border-green-600'}`}>
-        {/* Barra de Título */}
-        <div className="bg-[#107c41] text-white px-2 py-1.5 flex justify-between items-center select-none text-[11px] flex-shrink-0">
-            <div className="flex items-center gap-2 font-bold"><FileSpreadsheet size={14}/> DADOS DO EXCEL</div>
-            <div className="flex items-center gap-2">
-                <button 
-                    onClick={() => setIsTextWrapped(!isTextWrapped)}
-                    className={`flex items-center gap-1 px-2 py-0.5 rounded border transition-colors ${isTextWrapped ? 'bg-white text-green-700' : 'bg-green-800 text-white border-green-600'}`}
-                    title="Alternar quebra de linha"
-                >
-                    <WrapText size={12}/> {isTextWrapped ? "Texto Completo" : "Cortar Texto"}
-                </button>
-                <button 
-                    onClick={() => setIsExcelDocked(!isExcelDocked)}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded border bg-green-800 text-white border-green-600 hover:bg-green-700"
-                    title={isExcelDocked ? "Soltar do fundo (Rolar com a página)" : "Fixar no fundo"}
-                >
-                    {isExcelDocked ? <PinOff size={12}/> : <Pin size={12}/>}
-                    {isExcelDocked ? "Soltar" : "Fixar"}
-                </button>
-            </div>
-        </div>
-
-        {/* Tabela */}
-        <div className="overflow-auto flex-grow bg-gray-100 custom-scrollbar relative">
-            <table className="border-collapse text-[12px] font-sans bg-white cursor-cell w-max min-w-full">
-                <thead className="sticky top-0 z-10 shadow-sm">
-                    <tr>
-                        <th className="w-10 bg-gray-100 border-r border-b border-gray-300 font-bold text-gray-500">#</th>
-                        {invoiceData.rawData[0].map((_, i) => (
-                            <th key={i} className="bg-gray-100 border-r border-b border-gray-300 px-2 py-1 font-bold text-gray-700 min-w-[120px] text-center">
-                                {getColLetter(i)}
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody ref={tableRef}>
-                    {invoiceData.rawData.map((row, rIdx) => (
-                        <tr key={rIdx} className={isTextWrapped ? "" : "h-6"}>
-                            <td className="bg-gray-100 border-r border-b border-gray-300 text-center text-gray-500 font-semibold select-none sticky left-0">{rIdx + 1}</td>
-                            {row.map((cell, cIdx) => {
-                                const selected = isCellSelected(rIdx, cIdx);
-                                return (
-                                    <td key={cIdx} 
-                                        onMouseDown={() => handleMouseDown(rIdx, cIdx)}
-                                        onMouseEnter={() => handleMouseEnter(rIdx, cIdx)}
-                                        className={`border-r border-b border-gray-300 px-2 py-1 relative min-w-[120px] max-w-[400px]
-                                            ${isTextWrapped ? 'whitespace-pre-wrap break-words align-top h-auto' : 'whitespace-nowrap overflow-hidden text-ellipsis h-6'}
-                                            ${selected ? 'bg-green-100 border-green-500 border-double z-10' : 'hover:bg-blue-50'}`}
-                                        style={{ 
-                                            cursor: "url('data:image/svg+xml;utf8,<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M12 2V22M2 12H22\" stroke=\"white\" stroke-width=\"3\" filter=\"drop-shadow(0px 0px 1px black)\"/></svg>') 12 12, cell" 
-                                        }}
-                                        title={String(cell)}
-                                    >
-                                        {String(cell)}
-                                    </td>
-                                )
-                            })}
-                        </tr>
-                    ))}
-                    {/* Padding extra no final para garantir que o scroll mostra tudo */}
-                    <tr className="h-12 bg-transparent"><td colSpan={100}></td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-  );
-
   return (
     <div className="flex h-screen overflow-hidden bg-gray-100 font-sans select-none md:select-auto" onMouseUp={handleMouseUp}>
       
@@ -305,11 +240,11 @@ function NovaFaturaContent() {
           </div>
         </div>
 
-        {/* ÁREA DE SCROLL PRINCIPAL (Formulário + Excel se não estiver fixo) */}
+        {/* ÁREA DE SCROLL PRINCIPAL */}
         <div className="flex-grow overflow-y-auto p-0 flex flex-col relative"> 
           
+          {/* Formulário */}
           <div className="p-6 space-y-3 pb-10 flex-grow">
-            {/* ... FORMULÁRIO (Igual ao anterior) ... */}
             <div className="grid grid-cols-2 gap-2">
                 <div>
                 <label className="text-[10px] font-bold text-gray-500 uppercase">Cliente / Seguro</label>
@@ -320,7 +255,6 @@ function NovaFaturaContent() {
                 <input type="text" className="w-full border border-gray-300 p-2 rounded text-xs font-bold focus:ring-1 focus:ring-blue-500" value={invoiceData.patientName} onChange={e => setInvoiceData({...invoiceData, patientName: e.target.value})} onPaste={(e) => handleSmartPaste(e, 'patient')} placeholder="Cole (Nome+NID+Tel)"/>
                 </div>
             </div>
-            {/* (Resto dos inputs do formulário...) */}
             <div className="grid grid-cols-2 gap-2">
                 <input type="text" className="border p-2 rounded text-xs" placeholder="NID" value={invoiceData.patientNid} onChange={e => setInvoiceData({...invoiceData, patientNid: e.target.value})}/>
                 <input type="text" className="border p-2 rounded text-xs" placeholder="Contacto" value={invoiceData.patientContact} onChange={e => setInvoiceData({...invoiceData, patientContact: e.target.value})}/>
@@ -346,10 +280,45 @@ function NovaFaturaContent() {
             </div>
           </div>
 
-          {/* EXCEL INLINE (Se não estiver dockado) */}
+          {/* EXCEL INLINE (Se não estiver fixo) */}
           {hasExcel && !isExcelDocked && (
              <div className="mt-8 border-t-4 border-green-600">
-                 <ExcelPanel />
+                 {/* Conteúdo do Excel (Duplicado aqui para lógica de fixar/soltar) */}
+                 <div className="flex flex-col bg-white shadow-inner min-h-[400px]">
+                    <div className="bg-[#107c41] text-white px-2 py-1.5 flex justify-between items-center select-none text-[11px] flex-shrink-0">
+                        <div className="flex items-center gap-2 font-bold"><FileSpreadsheet size={14}/> EXCEL DATA</div>
+                        <div className="flex items-center gap-2">
+                            <button onClick={() => setIsTextWrapped(!isTextWrapped)} className="flex items-center gap-1 px-2 py-0.5 rounded border border-green-500 hover:bg-green-700"><WrapText size={12}/> {isTextWrapped ? "Expandido" : "Quebrar Texto"}</button>
+                            <button onClick={() => setIsExcelDocked(true)} className="flex items-center gap-1 px-2 py-0.5 rounded border bg-green-800 border-green-600 hover:bg-green-700"><Pin size={12}/> Fixar</button>
+                        </div>
+                    </div>
+                    <div className="overflow-auto bg-gray-100 custom-scrollbar relative pb-12" onMouseLeave={handleMouseUp}>
+                        <table className="border-collapse text-[12px] font-sans bg-white cursor-cell w-max min-w-full">
+                            <thead className="sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                    <th className="w-10 bg-gray-100 border-r border-b border-gray-300 font-bold text-gray-500">#</th>
+                                    {invoiceData.rawData[0] && invoiceData.rawData[0].map((_, i) => (
+                                        <th key={i} className="bg-gray-100 border-r border-b border-gray-300 px-2 py-1 font-bold text-gray-700 min-w-[120px] text-center">{getColLetter(i)}</th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody ref={tableRef}>
+                                {invoiceData.rawData.map((row, rIdx) => (
+                                    <tr key={rIdx} className={isTextWrapped ? "" : "h-6"}>
+                                        <td className="bg-gray-100 border-r border-b border-gray-300 text-center text-gray-500 font-semibold select-none sticky left-0">{rIdx + 1}</td>
+                                        {row.map((cell, cIdx) => (
+                                            <td key={cIdx} onMouseDown={() => handleMouseDown(rIdx, cIdx)} onMouseEnter={() => handleMouseEnter(rIdx, cIdx)}
+                                                className={`border-r border-b border-gray-300 px-2 py-1 relative min-w-[120px] max-w-[400px] ${isTextWrapped ? 'whitespace-pre-wrap break-words' : 'whitespace-nowrap overflow-hidden text-ellipsis h-6'} ${isCellSelected(rIdx, cIdx) ? 'bg-green-100 border-green-500 border-double z-10' : 'hover:bg-blue-50'}`}
+                                                style={{ cursor: "url('data:image/svg+xml;utf8,<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M12 2V22M2 12H22\" stroke=\"white\" stroke-width=\"3\" filter=\"drop-shadow(0px 0px 1px black)\"/></svg>') 12 12, cell" }}
+                                                title={String(cell)}>{String(cell)}</td>
+                                        ))}
+                                    </tr>
+                                ))}
+                                <tr className="h-12 bg-transparent"><td colSpan={100}></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                 </div>
              </div>
           )}
         </div>
@@ -371,13 +340,43 @@ function NovaFaturaContent() {
 
         {/* EXCEL DOCKED (Fixo no fundo) */}
         {hasExcel && isExcelDocked && (
-          <div 
-            className="flex-shrink-0 border-t-4 border-green-600 bg-white relative flex flex-col shadow-[0_-10px_30px_rgba(0,0,0,0.2)] z-30 transition-height duration-100 ease-out"
-            style={{ height: `${excelHeight}px` }}
-          >
-            {/* Drag Handle */}
+          <div className="flex-shrink-0 border-t-4 border-green-600 bg-white relative flex flex-col shadow-[0_-10px_30px_rgba(0,0,0,0.2)] z-30 transition-height duration-100 ease-out" style={{ height: `${excelHeight}px` }}>
             <div onMouseDown={(e) => { e.preventDefault(); setIsResizingHeight(true); document.body.style.cursor = "row-resize"; }} className="absolute -top-3 left-0 w-full h-6 cursor-row-resize flex justify-center items-center group z-40 hover:scale-105"><div className="w-16 h-1.5 bg-gray-300 group-hover:bg-green-600 rounded-full border border-white shadow-sm"></div></div>
-            <ExcelPanel />
+            
+            <div className="bg-[#107c41] text-white px-2 py-1.5 flex justify-between items-center select-none text-[11px] flex-shrink-0">
+                <div className="flex items-center gap-2 font-bold"><FileSpreadsheet size={14}/> DADOS DO EXCEL</div>
+                <div className="flex items-center gap-2">
+                    <button onClick={() => setIsTextWrapped(!isTextWrapped)} className="flex items-center gap-1 px-2 py-0.5 rounded border border-green-500 hover:bg-green-700"><WrapText size={12}/> {isTextWrapped ? "Expandido" : "Cortar"}</button>
+                    <button onClick={() => setIsExcelDocked(false)} className="flex items-center gap-1 px-2 py-0.5 rounded border bg-green-800 border-green-600 hover:bg-green-700"><PinOff size={12}/> Soltar</button>
+                </div>
+            </div>
+
+            <div className="overflow-auto flex-grow bg-gray-100 custom-scrollbar relative pb-12" onMouseLeave={handleMouseUp}>
+                <table className="border-collapse text-[12px] font-sans bg-white cursor-cell w-max min-w-full">
+                    <thead className="sticky top-0 z-10 shadow-sm">
+                        <tr>
+                            <th className="w-10 bg-gray-100 border-r border-b border-gray-300 font-bold text-gray-500">#</th>
+                            {invoiceData.rawData[0] && invoiceData.rawData[0].map((_, i) => (
+                                <th key={i} className="bg-gray-100 border-r border-b border-gray-300 px-2 py-1 font-bold text-gray-700 min-w-[120px] text-center">{getColLetter(i)}</th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody ref={tableRef}>
+                        {invoiceData.rawData.map((row, rIdx) => (
+                            <tr key={rIdx} className={isTextWrapped ? "" : "h-6"}>
+                                <td className="bg-gray-100 border-r border-b border-gray-300 text-center text-gray-500 font-semibold select-none sticky left-0">{rIdx + 1}</td>
+                                {row.map((cell, cIdx) => (
+                                    <td key={cIdx} onMouseDown={() => handleMouseDown(rIdx, cIdx)} onMouseEnter={() => handleMouseEnter(rIdx, cIdx)}
+                                        className={`border-r border-b border-gray-300 px-2 py-1 relative min-w-[120px] max-w-[400px] ${isTextWrapped ? 'whitespace-pre-wrap break-words' : 'whitespace-nowrap overflow-hidden text-ellipsis h-6'} ${isCellSelected(rIdx, cIdx) ? 'bg-green-100 border-green-500 border-double z-10' : 'hover:bg-blue-50'}`}
+                                        style={{ cursor: "url('data:image/svg+xml;utf8,<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M12 2V22M2 12H22\" stroke=\"white\" stroke-width=\"3\" filter=\"drop-shadow(0px 0px 1px black)\"/></svg>') 12 12, cell" }}
+                                        title={String(cell)}>{String(cell)}</td>
+                                ))}
+                            </tr>
+                        ))}
+                        <tr className="h-12 bg-transparent"><td colSpan={100}></td></tr>
+                    </tbody>
+                </table>
+            </div>
           </div>
         )}
       </div>
