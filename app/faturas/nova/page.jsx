@@ -26,7 +26,7 @@ function NovaFaturaContent() {
   const mode = searchParams.get("mode");
   const componentRef = useRef();
   
-  // --- REFERENCES (Definidas no topo para evitar erros) ---
+  // --- REFS ---
   const sidebarRef = useRef(null);
   const tableRef = useRef(null); 
 
@@ -34,7 +34,7 @@ function NovaFaturaContent() {
   const [loading, setLoading] = useState(false);
   const [nextNumberPreview, setNextNumberPreview] = useState(null);
   
-  // Layout States
+  // Layout States (Sidebar & Excel Height)
   const [sidebarWidth, setSidebarWidth] = useState(45);
   const [excelHeight, setExcelHeight] = useState(350);
   const [isResizingWidth, setIsResizingWidth] = useState(false);
@@ -44,6 +44,10 @@ function NovaFaturaContent() {
   const [isExcelDocked, setIsExcelDocked] = useState(true);
   const [isTextWrapped, setIsTextWrapped] = useState(true); 
   const [selection, setSelection] = useState({ start: null, end: null, isSelecting: false });
+  
+  // --- COLUMN RESIZING STATES (NOVO) ---
+  const [colWidths, setColWidths] = useState({}); // Guarda largura de cada coluna: { 0: 150, 1: 80 }
+  const [resizingCol, setResizingCol] = useState(null); // { index: 0, startX: 100, startWidth: 150 }
 
   const [invoiceData, setInvoiceData] = useState({
     invoiceNumber: "", clientName: "", patientName: "", patientNid: "", patientContact: "",
@@ -103,7 +107,15 @@ function NovaFaturaContent() {
   // --- EXCEL SELECTION LOGIC ---
   const handleMouseDown = (r, c) => setSelection({ start: { r, c }, end: { r, c }, isSelecting: true });
   const handleMouseEnter = (r, c) => { if (selection.isSelecting) setSelection(prev => ({ ...prev, end: { r, c } })); };
-  const handleMouseUp = () => setSelection(prev => ({ ...prev, isSelecting: false }));
+  const handleMouseUp = () => {
+      setSelection(prev => ({ ...prev, isSelecting: false }));
+      // Parar resize de colunas também
+      setResizingCol(null);
+      setIsResizingWidth(false);
+      setIsResizingHeight(false);
+      document.body.style.cursor = "default";
+      document.body.style.userSelect = "auto";
+  };
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -140,36 +152,40 @@ function NovaFaturaContent() {
       return r >= minR && r <= maxR && c >= minC && c <= maxC;
   };
 
-  // --- RESIZING LOGIC ---
+  // --- GLOBAL RESIZING LOGIC (Sidebar + Height + Columns) ---
   const handleResizeMove = useCallback((e) => {
+    // 1. Sidebar Width
     if (isResizingWidth) {
       const newWidth = (e.clientX / window.innerWidth) * 100;
       if (newWidth > 25 && newWidth < 75) setSidebarWidth(newWidth);
     }
+    // 2. Excel Height
     if (isResizingHeight) {
       const newHeight = window.innerHeight - e.clientY;
       if (newHeight > 100 && newHeight < window.innerHeight - 100) setExcelHeight(newHeight);
     }
-  }, [isResizingWidth, isResizingHeight]);
-
-  const handleResizeUp = useCallback(() => {
-    setIsResizingWidth(false);
-    setIsResizingHeight(false);
-    document.body.style.cursor = "default";
-    document.body.style.userSelect = "auto";
-  }, []);
+    // 3. Column Width (NOVO)
+    if (resizingCol) {
+        const diff = e.clientX - resizingCol.startX;
+        const newWidth = Math.max(40, resizingCol.startWidth + diff); // Minimo 40px
+        setColWidths(prev => ({
+            ...prev,
+            [resizingCol.index]: newWidth
+        }));
+    }
+  }, [isResizingWidth, isResizingHeight, resizingCol]);
 
   useEffect(() => {
-    if (isResizingWidth || isResizingHeight) {
+    if (isResizingWidth || isResizingHeight || resizingCol) {
       window.addEventListener("mousemove", handleResizeMove);
-      window.addEventListener("mouseup", handleResizeUp);
+      window.addEventListener("mouseup", handleMouseUp);
       document.body.style.userSelect = "none"; 
     }
     return () => {
       window.removeEventListener("mousemove", handleResizeMove);
-      window.removeEventListener("mouseup", handleResizeUp);
+      window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isResizingWidth, isResizingHeight, handleResizeMove, handleResizeUp]);
+  }, [isResizingWidth, isResizingHeight, resizingCol, handleResizeMove]);
 
   // --- DATA LOADING ---
   useEffect(() => {
@@ -222,19 +238,33 @@ function NovaFaturaContent() {
   const getColLetter = (i) => String.fromCharCode(65 + i);
   const hasExcel = invoiceData.rawData && invoiceData.rawData.length > 0;
 
-  // --- HELPER RENDER PARA O CONTEÚDO DA TABELA ---
-  // Isto não é um componente separado, é uma função de renderização direta
-  // para evitar o erro de referência
+  // --- HELPER RENDER EXCEL TABLE ---
   const renderExcelTableContent = () => (
-    <table className="border-collapse text-[12px] font-sans bg-white cursor-cell w-max min-w-full">
+    <table className="border-collapse text-[12px] font-sans bg-white cursor-cell w-max">
         <thead className="sticky top-0 z-10 shadow-sm">
             <tr>
-                <th className="w-10 bg-gray-100 border-r border-b border-gray-300 font-bold text-gray-500">#</th>
-                {invoiceData.rawData[0].map((_, i) => (
-                    <th key={i} className="bg-gray-100 border-r border-b border-gray-300 px-2 py-1 font-bold text-gray-700 min-w-[120px] text-center">
-                        {getColLetter(i)}
-                    </th>
-                ))}
+                <th className="w-10 bg-gray-100 border-r border-b border-gray-300 font-bold text-gray-500 select-none">#</th>
+                {invoiceData.rawData[0].map((_, i) => {
+                    const width = colWidths[i] || 120; // Default 120px
+                    return (
+                        <th 
+                            key={i} 
+                            className="bg-gray-100 border-r border-b border-gray-300 px-2 py-1 font-bold text-gray-700 text-center relative select-none"
+                            style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
+                        >
+                            {getColLetter(i)}
+                            {/* GRABBER (Pega para redimensionar) */}
+                            <div 
+                                className="absolute right-0 top-0 w-2 h-full cursor-col-resize hover:bg-green-400 opacity-0 hover:opacity-100 transition-opacity z-20"
+                                onMouseDown={(e) => {
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    setResizingCol({ index: i, startX: e.clientX, startWidth: width });
+                                }}
+                            />
+                        </th>
+                    );
+                })}
             </tr>
         </thead>
         <tbody ref={tableRef}>
@@ -242,15 +272,17 @@ function NovaFaturaContent() {
                 <tr key={rIdx} className={isTextWrapped ? "" : "h-6"}>
                     <td className="bg-gray-100 border-r border-b border-gray-300 text-center text-gray-500 font-semibold select-none sticky left-0">{rIdx + 1}</td>
                     {row.map((cell, cIdx) => {
+                        const width = colWidths[cIdx] || 120;
                         const selected = isCellSelected(rIdx, cIdx);
                         return (
                             <td key={cIdx} 
                                 onMouseDown={() => handleMouseDown(rIdx, cIdx)}
                                 onMouseEnter={() => handleMouseEnter(rIdx, cIdx)}
-                                className={`border-r border-b border-gray-300 px-2 py-1 relative min-w-[120px] max-w-[400px]
+                                className={`border-r border-b border-gray-300 px-2 py-1 relative
                                     ${isTextWrapped ? 'whitespace-pre-wrap break-words align-top h-auto' : 'whitespace-nowrap overflow-hidden text-ellipsis h-6'}
                                     ${selected ? 'bg-green-100 border-green-500 border-double z-10' : 'hover:bg-blue-50'}`}
                                 style={{ 
+                                    width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px`,
                                     cursor: "url('data:image/svg+xml;utf8,<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M12 2V22M2 12H22\" stroke=\"white\" stroke-width=\"3\" filter=\"drop-shadow(0px 0px 1px black)\"/></svg>') 12 12, cell" 
                                 }}
                                 title={String(cell)}
@@ -261,7 +293,7 @@ function NovaFaturaContent() {
                     })}
                 </tr>
             ))}
-            {/* ESPAÇO EXTRA NO FUNDO PARA O SCROLL NÃO CORTAR O TOTAL */}
+            {/* Espaço extra para o scroll */}
             <tr className="h-24 bg-transparent border-none"><td colSpan={100} className="border-none"></td></tr>
         </tbody>
     </table>
@@ -285,11 +317,11 @@ function NovaFaturaContent() {
           </div>
         </div>
 
-        {/* ÁREA DE SCROLL PRINCIPAL (Formulário + Excel se não estiver fixo) */}
+        {/* ÁREA DE SCROLL PRINCIPAL */}
         <div className="flex-grow overflow-y-auto p-0 flex flex-col relative"> 
           
           <div className="p-6 space-y-3 pb-10 flex-grow">
-            {/* Formulário ... */}
+            {/* Formulario */}
             <div className="grid grid-cols-2 gap-2">
                 <div>
                 <label className="text-[10px] font-bold text-gray-500 uppercase">Cliente / Seguro</label>
@@ -300,7 +332,6 @@ function NovaFaturaContent() {
                 <input type="text" className="w-full border border-gray-300 p-2 rounded text-xs font-bold focus:ring-1 focus:ring-blue-500" value={invoiceData.patientName} onChange={e => setInvoiceData({...invoiceData, patientName: e.target.value})} onPaste={(e) => handleSmartPaste(e, 'patient')} placeholder="Cole (Nome+NID+Tel)"/>
                 </div>
             </div>
-            {/* (Resto dos inputs) */}
             <div className="grid grid-cols-2 gap-2">
                 <input type="text" className="border p-2 rounded text-xs" placeholder="NID" value={invoiceData.patientNid} onChange={e => setInvoiceData({...invoiceData, patientNid: e.target.value})}/>
                 <input type="text" className="border p-2 rounded text-xs" placeholder="Contacto" value={invoiceData.patientContact} onChange={e => setInvoiceData({...invoiceData, patientContact: e.target.value})}/>
@@ -331,13 +362,13 @@ function NovaFaturaContent() {
              <div className="mt-8 border-t-4 border-green-600">
                  <div className="flex flex-col bg-white shadow-inner min-h-[400px]">
                     <div className="bg-[#107c41] text-white px-2 py-1.5 flex justify-between items-center select-none text-[11px] flex-shrink-0">
-                        <div className="flex items-center gap-2 font-bold"><FileSpreadsheet size={14}/> DADOS DO EXCEL</div>
+                        <div className="flex items-center gap-2 font-bold"><FileSpreadsheet size={14}/> EXCEL DATA</div>
                         <div className="flex items-center gap-2">
                             <button onClick={() => setIsTextWrapped(!isTextWrapped)} className="flex items-center gap-1 px-2 py-0.5 rounded border border-green-500 hover:bg-green-700"><WrapText size={12}/> {isTextWrapped ? "Expandido" : "Cortar"}</button>
                             <button onClick={() => setIsExcelDocked(true)} className="flex items-center gap-1 px-2 py-0.5 rounded border bg-green-800 border-green-600 hover:bg-green-700"><Pin size={12}/> Fixar</button>
                         </div>
                     </div>
-                    <div className="overflow-auto bg-gray-100 custom-scrollbar relative" onMouseLeave={handleMouseUp}>
+                    <div className="overflow-auto bg-gray-100 custom-scrollbar relative pb-12" onMouseLeave={handleMouseUp}>
                         {renderExcelTableContent()}
                     </div>
                  </div>
@@ -345,7 +376,7 @@ function NovaFaturaContent() {
           )}
         </div>
 
-        {/* Footer Actions (Sempre Fixo) */}
+        {/* Footer Actions */}
         <div className="border-t p-3 bg-white shadow-[0_-5px_10px_rgba(0,0,0,0.05)] z-20 flex-shrink-0">
            <div className="flex justify-between items-center mb-2 bg-gray-800 text-white p-2 rounded">
               <span className="text-xs uppercase text-gray-300">Total</span>
@@ -360,7 +391,7 @@ function NovaFaturaContent() {
            </div>
         </div>
 
-        {/* EXCEL DOCKED (Fixo no fundo) */}
+        {/* EXCEL DOCKED */}
         {hasExcel && isExcelDocked && (
           <div 
             className="flex-shrink-0 border-t-4 border-green-600 bg-white relative flex flex-col shadow-[0_-10px_30px_rgba(0,0,0,0.2)] z-30 transition-height duration-100 ease-out"
@@ -376,7 +407,7 @@ function NovaFaturaContent() {
                 </div>
             </div>
 
-            <div className="overflow-auto flex-grow bg-gray-100 custom-scrollbar relative" onMouseLeave={handleMouseUp}>
+            <div className="overflow-auto flex-grow bg-gray-100 custom-scrollbar relative pb-12" onMouseLeave={handleMouseUp}>
                 {renderExcelTableContent()}
             </div>
           </div>
